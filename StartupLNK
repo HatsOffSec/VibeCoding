@@ -1,0 +1,57 @@
+# Script: Find-StartupLNKs.ps1
+# Purpose: Look for LNK files in Startup folders (auto-run at logon)
+
+Write-Host "Scanning Startup folders for LNK-based persistence..." -ForegroundColor Cyan
+
+# Startup folders (all users + per-user)
+$paths = @()
+$paths += "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup"   # All users
+$paths += "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"       # Current user
+
+# Add Startup folder for every user profile
+$users = Get-ChildItem "C:\Users" -Force -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer }
+foreach ($u in $users) {
+    $paths += "$($u.FullName)\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+}
+
+# Deduplicate
+$paths = $paths | Sort-Object -Unique
+
+Write-Host "`nChecking these Startup paths:" -ForegroundColor Yellow
+$paths | ForEach-Object { Write-Host "  $_" }
+
+# Gather results
+$results = foreach ($p in $paths) {
+    if (Test-Path $p) {
+        Get-ChildItem -Path $p -Filter *.lnk -ErrorAction SilentlyContinue | ForEach-Object {
+            # Try to resolve shortcut target
+            $wsh = New-Object -ComObject WScript.Shell
+            try {
+                $shortcut = $wsh.CreateShortcut($_.FullName)
+                [PSCustomObject]@{
+                    UserFolder = $p
+                    Location   = $_.FullName
+                    Target     = $shortcut.TargetPath
+                    Args       = $shortcut.Arguments
+                    Modified   = $_.LastWriteTime
+                }
+            } catch {
+                [PSCustomObject]@{
+                    UserFolder = $p
+                    Location   = $_.FullName
+                    Target     = "Could not resolve"
+                    Args       = ""
+                    Modified   = $_.LastWriteTime
+                }
+            }
+        }
+    }
+}
+
+# Output results
+if ($results) {
+    Write-Host "`n=== LNK Files Found in Startup Folders ===" -ForegroundColor Yellow
+    $results | Format-Table -AutoSize
+} else {
+    Write-Host "`nNo LNK files found in Startup folders." -ForegroundColor Green
+}
